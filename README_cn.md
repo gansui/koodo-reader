@@ -13,7 +13,7 @@
 </h1>
 
 <h3 align="center">
-  一个跨平台的电子书阅读器
+  一个跨平台的电子书阅读器(服务器端目录支持版本)
 </h3>
 
 <div align="center">
@@ -99,6 +99,10 @@ brew install --cask koodo-reader
 ### 使用 Docker 安装：
 
 [部署教程](https://koodoreader.com/zh/deploy-docker)
+
+docker run -d  --restart=always   --name koodo-reader  -p 2018:80      -v /docker/koodo-reader/uploads:/app/uploads   -v /dir:/app/serverbooks   -e ENABLE_HTTP_SERVER=true    -e SERVER_BOOKS_DIR=/app/serverbooks   gansui/koodo-reader:latest
+
+/dir目录中的书籍就可以阅读了,同时支持对服务器端书籍文件删除
 
 ## 截图
 
