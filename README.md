@@ -10,7 +10,7 @@
 </div>
 
 <h1 align="center">
-  Koodo Reader
+  Koodo Reader(server version)
 </h1>
 
 <h3 align="center">
