@@ -1,0 +1,55 @@
+# ── Stage 1: Build Go httpserver ──────────────────────────────────────────────
+FROM golang:alpine AS go-builder
+
+WORKDIR /build
+COPY httpserver/go.mod httpserver/go.sum ./
+RUN go mod download
+COPY httpserver/*.go ./
+RUN CGO_ENABLED=0 GOOS=linux go build -o httpserver .
+
+# ── Stage 2: Build React app ─────────────────────────────────────────────────
+FROM node:20-alpine AS react-builder
+
+WORKDIR /app
+COPY package.json yarn.lock ./
+RUN yarn install --frozen-lockfile --network-timeout 600000
+COPY . .
+RUN yarn build
+
+# ── Stage 3: Final image ─────────────────────────────────────────────────────
+FROM caddy:latest
+
+# Copy React build output
+COPY --from=react-builder /app/build /usr/share/caddy
+
+# Copy Go binary
+COPY --from=go-builder /build/httpserver /app/httpserver
+
+# Create uploads directory with proper permissions
+RUN mkdir -p /app/uploads && chmod 755 /app/uploads
+
+# Expose both Caddy (80), httpServer (8080), and KOReader sync server (7200) ports
+EXPOSE 80 8080 7200
+
+# Create startup script to run both services
+RUN echo '#!/bin/sh' > /start.sh && \
+    echo 'cd /app' >> /start.sh && \
+    echo '/app/httpserver &' >> /start.sh && \
+    echo 'caddy run --config /etc/caddy/Caddyfile' >> /start.sh && \
+    chmod +x /start.sh
+
+# Set default environment variables (can be overridden at runtime)
+ENV ENABLE_HTTP_SERVER=false
+ENV SERVER_USERNAME=admin
+ENV SERVER_PASSWORD=securePass123
+ENV SERVER_PASSWORD_FILE=my_secret
+ENV ENABLE_KOREADER_SERVER=false
+ENV ENABLE_KOREADER_REGISTRATION=true
+ENV ENABLE_OPDS=false
+ENV SERVER_BOOKS_DIR=""
+
+# Define volume for uploads directory and server books directory
+VOLUME ["/app/uploads"]
+VOLUME ["/app/serverbooks"]
+
+CMD ["/start.sh"]

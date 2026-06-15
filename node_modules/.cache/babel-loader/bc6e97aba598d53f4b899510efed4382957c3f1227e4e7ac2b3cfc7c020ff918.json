@@ -1,0 +1,1 @@
+{"ast":null,"code":"import sample from './sample.js';\n\n// Shuffle a collection.\nexport default function shuffle(obj) {\n  return sample(obj, Infinity);\n}","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

@@ -1,0 +1,1 @@
+{"ast":null,"code":"import _ from './underscore.js';\n\n// Start chaining a wrapped Underscore object.\nexport default function chain(obj) {\n  var instance = _(obj);\n  instance._chain = true;\n  return instance;\n}","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

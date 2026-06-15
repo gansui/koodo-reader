@@ -1,0 +1,1 @@
+{"ast":null,"code":"var htmlPaths = require(\"./styles/html-paths\");\nvar Html = require(\"./html\");\nexports.element = element;\nfunction element(name) {\n  return function (html) {\n    return Html.elementWithTag(htmlPaths.element(name), [html]);\n  };\n}","map":null,"metadata":{},"sourceType":"script","externalDependencies":[]}

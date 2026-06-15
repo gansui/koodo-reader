@@ -1,0 +1,1 @@
+{"ast":null,"code":"/* eslint-env node */\nvar Readability = require(\"./Readability\");\nvar isProbablyReaderable = require(\"./Readability-readerable\");\nmodule.exports = {\n  Readability: Readability,\n  isProbablyReaderable: isProbablyReaderable\n};","map":null,"metadata":{},"sourceType":"script","externalDependencies":[]}

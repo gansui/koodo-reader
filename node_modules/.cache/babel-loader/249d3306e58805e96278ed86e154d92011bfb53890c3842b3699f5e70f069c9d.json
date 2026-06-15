@@ -1,0 +1,1 @@
+{"ast":null,"code":"import invert from './invert.js';\nimport escapeMap from './_escapeMap.js';\n\n// Internal list of HTML entities for unescaping.\nexport default invert(escapeMap);","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

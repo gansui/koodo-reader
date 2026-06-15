@@ -1,0 +1,19 @@
+version: "3.8"
+
+services:
+  koodo-reader:
+    build: .
+    container_name: koodo-reader
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "8080:8080"
+    environment:
+      - ENABLE_HTTP_SERVER=true
+      # 逗号分隔支持多个目录扫描
+      - SERVER_BOOKS_DIR=/app/serverbooks,/app/serverbooks2
+    volumes:
+      - /opt/uploads:/app/uploads
+      - /opt/book:/app/serverbooks
+      # 如果需要扫描多个目录，添加更多挂载
+      # - /opt/book2:/app/serverbooks2

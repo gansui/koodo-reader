@@ -1,0 +1,1 @@
+{"ast":null,"code":"import createPredicateIndexFinder from './_createPredicateIndexFinder.js';\n\n// Returns the last index on an array-like that passes a truth test.\nexport default createPredicateIndexFinder(-1);","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}
