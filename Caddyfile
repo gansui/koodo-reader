@@ -1,0 +1,12 @@
+:80 {
+	root * /usr/share/caddy
+
+	handle /api/* {
+		reverse_proxy localhost:8080
+	}
+
+	handle {
+		file_server
+		try_files {path} /index.html
+	}
+}

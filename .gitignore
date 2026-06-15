@@ -12,6 +12,8 @@
 #/build
 
 dist/
+httpserver/httpserver-linux-*
+Dockerfile.build
 
 /build/*
 /.vscode

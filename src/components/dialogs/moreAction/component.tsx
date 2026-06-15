@@ -134,6 +134,42 @@ class MoreAction extends React.Component<MoreActionProps, MoreActionState> {
           }
         >
           <div className="action-dialog-actions-container">
+            {BookUtil.isServerBook(this.props.currentBook) && (
+              <div
+                className="action-dialog-edit"
+                style={{ paddingLeft: "0px" }}
+                onClick={async () => {
+                  const filename = BookUtil.getServerBookFilename(this.props.currentBook);
+                  const dir = BookUtil.getServerBookDir(this.props.currentBook);
+                  toast.loading(this.props.t("Deleting file") + "...", {
+                    id: "delete-server-file",
+                  });
+                  const ok = await BookUtil.deleteServerBookFile(filename, dir || undefined);
+                  if (ok) {
+                    await BookUtil.deleteBook(
+                      this.props.currentBook.key,
+                      this.props.currentBook.format.toLowerCase()
+                    );
+                    await DatabaseService.deleteRecord(this.props.currentBook.key, "books");
+                    await CoverUtil.deleteCover(this.props.currentBook.key);
+                    toast.success(this.props.t("File deleted"), {
+                      id: "delete-server-file",
+                    });
+                    this.props.handleMoreAction(false);
+                    this.props.handleActionDialog(false);
+                    window.location.reload();
+                  } else {
+                    toast.error(this.props.t("Delete failed"), {
+                      id: "delete-server-file",
+                    });
+                  }
+                }}
+              >
+                <p className="action-name">
+                  <Trans>Delete file</Trans>
+                </p>
+              </div>
+            )}
             <div
               className="action-dialog-edit"
               style={{ paddingLeft: "0px" }}

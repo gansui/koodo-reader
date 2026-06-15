@@ -5,8 +5,9 @@
 ### Nginx or Apache can also be used, Caddy is just smaller in size
 FROM caddy:latest
 
-# Copy pre-built website files (built by CI runner, platform-independent)
+# Copy React app and custom Caddyfile
 COPY build/ /usr/share/caddy
+COPY Caddyfile /etc/caddy/Caddyfile
 
 # Copy pre-compiled Go binary for the target platform
 ARG TARGETARCH
@@ -28,14 +29,13 @@ RUN echo '#!/bin/sh' > /start.sh && \
 
 # Set default environment variables (can be overridden at runtime)
 ENV ENABLE_HTTP_SERVER=false
-ENV SERVER_USERNAME=admin
-ENV SERVER_PASSWORD=securePass123
-ENV SERVER_PASSWORD_FILE=my_secret
 ENV ENABLE_KOREADER_SERVER=false
 ENV ENABLE_KOREADER_REGISTRATION=true
 ENV ENABLE_OPDS=false
+ENV SERVER_BOOKS_DIR=""
 
-# Define volume for uploads directory
+# Define volume for uploads directory and server books directory
 VOLUME ["/app/uploads"]
+VOLUME ["/app/serverbooks"]
 
 CMD ["/start.sh"]

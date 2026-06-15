@@ -9,15 +9,11 @@ services:
       - "80:80"
       - "8080:8080"
     environment:
-      - SERVER_USERNAME=${SERVER_USERNAME:-admin}
-      - SERVER_PASSWORD=${SERVER_PASSWORD:-securePass123}
-      - ENABLE_HTTP_SERVER=false
+      - ENABLE_HTTP_SERVER=true
+      # 逗号分隔支持多个目录扫描
+      - SERVER_BOOKS_DIR=/app/serverbooks,/app/serverbooks2
     volumes:
-      # 使用主机目录（推荐）
       - /opt/uploads:/app/uploads
-      # 或者使用命名卷
-      # - uploads_data:/app/uploads
-# 如果使用命名卷，取消注释以下内容
-# volumes:
-#   uploads_data:
-#     driver: local
+      - /opt/book:/app/serverbooks
+      # 如果需要扫描多个目录，添加更多挂载
+      # - /opt/book2:/app/serverbooks2

@@ -246,13 +246,6 @@ func writeXML(w http.ResponseWriter, status int, v any) {
 	_ = enc.Encode(v)
 }
 
-func opdsRequireAuth(w http.ResponseWriter) {
-	w.Header().Set("WWW-Authenticate", `Basic realm="OPDS Catalog"`)
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusUnauthorized)
-	_, _ = w.Write([]byte("Unauthorized"))
-}
-
 // ── OPDS handlers ─────────────────────────────────────────────────────────────
 
 // handleOPDSRoot serves the OPDS root navigation feed.
@@ -538,12 +531,6 @@ func buildEntry(b opdsBook, base string) atomEntry {
 // ── OPDS router ───────────────────────────────────────────────────────────────
 
 func opdsHandler(w http.ResponseWriter, r *http.Request) {
-	// Auth check
-	if !authenticate(r) {
-		opdsRequireAuth(w)
-		return
-	}
-
 	base := getServerOrigin(r)
 	path := r.URL.Path
 

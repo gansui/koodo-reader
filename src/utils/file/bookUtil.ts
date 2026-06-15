@@ -108,6 +108,26 @@ class BookUtil {
           resolve(false);
         }
       } else {
+        // For server books, check localforage first, then fall back to server
+        if (bookPath && bookPath.startsWith("server:")) {
+          localforage.getItem(key).then((result) => {
+            if (result) {
+              resolve(true);
+            } else {
+              const filename = this.getServerBookFilename({ path: bookPath } as Book);
+              const dir = this.getServerBookDir({ path: bookPath } as Book);
+              const baseUrl = this.getServerBooksUrl();
+              let url = `${baseUrl}/api/server-books/read?file=${encodeURIComponent(filename)}`;
+              if (dir) {
+                url += `&dir=${encodeURIComponent(dir)}`;
+              }
+              fetch(url, { method: "HEAD" })
+                .then((resp) => resolve(resp.ok))
+                .catch(() => resolve(false));
+            }
+          });
+          return;
+        }
         if (ConfigService.getReaderConfig("isUseLocal") === "yes") {
           LocalFileManager.fileExists(key + "." + format, "book").then(
             (exists) => {
@@ -162,6 +182,31 @@ class BookUtil {
         }
       });
     } else {
+      // For server books, check localforage first, then fall back to server
+      if (bookPath && bookPath.startsWith("server:")) {
+        return localforage.getItem(key).then((result) => {
+          if (result) {
+            const buffer = result as ArrayBuffer;
+            if (isArrayBuffer) return buffer;
+            let blobTemp = new Blob([buffer]);
+            return new File([blobTemp], "data", {
+              lastModified: new Date().getTime(),
+              type: blobTemp.type,
+            });
+          }
+          const filename = this.getServerBookFilename({ path: bookPath } as Book);
+          const dir = this.getServerBookDir({ path: bookPath } as Book);
+          return this.fetchBookContentFromServer(filename, dir || undefined).then((buffer) => {
+            if (!buffer) return false;
+            if (isArrayBuffer) return buffer;
+            let blobTemp = new Blob([buffer]);
+            return new File([blobTemp], "data", {
+              lastModified: new Date().getTime(),
+              type: blobTemp.type,
+            });
+          });
+        }) as Promise<ArrayBuffer | File | boolean>;
+      }
       if (ConfigService.getReaderConfig("isUseLocal") === "yes") {
         return LocalFileManager.readFile(
           key + "." + format,
@@ -710,6 +755,86 @@ class BookUtil {
       let books: Book[] = (await DatabaseService.getAllRecords("books")) || [];
       return books;
     }
+  }
+
+  static getServerBooksUrl(): string {
+    return "";
+  }
+
+  static async fetchServerBookList(): Promise<
+    { name: string; format: string; size: number; modifiedTime: string; dir: string }[]
+  > {
+    try {
+      const baseUrl = this.getServerBooksUrl();
+      const response = await fetch(`${baseUrl}/api/server-books`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      if (data.success) return data.books || [];
+      return [];
+    } catch (err) {
+      console.error("Failed to fetch server book list:", err);
+      return [];
+    }
+  }
+
+  static async fetchBookContentFromServer(filename: string, dir?: string): Promise<ArrayBuffer | null> {
+    try {
+      const baseUrl = this.getServerBooksUrl();
+      let url = `${baseUrl}/api/server-books/read?file=${encodeURIComponent(filename)}`;
+      if (dir) {
+        url += `&dir=${encodeURIComponent(dir)}`;
+      }
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.arrayBuffer();
+    } catch (err) {
+      console.error("Failed to fetch server book content:", err);
+      return null;
+    }
+  }
+
+  static async deleteServerBookFile(filename: string, dir?: string): Promise<boolean> {
+    try {
+      const baseUrl = this.getServerBooksUrl();
+      let url = `${baseUrl}/api/server-books/delete?file=${encodeURIComponent(filename)}`;
+      if (dir) {
+        url += `&dir=${encodeURIComponent(dir)}`;
+      }
+      const response = await fetch(url, { method: "DELETE" });
+      return response.ok;
+    } catch (err) {
+      console.error("Failed to delete server book file:", err);
+      return false;
+    }
+  }
+
+  static isServerBook(book: Book): boolean {
+    return !!(book.path && book.path.startsWith("server:"));
+  }
+
+  static getServerBookFilename(book: Book): string {
+    if (book.path && book.path.startsWith("server:")) {
+      // Format: "server:<dir>:<filename>" or legacy "server:<filename>"
+      const parts = book.path.substring(7).split(":");
+      if (parts.length >= 2 && parts[0].startsWith("/")) {
+        // New format with dir: "server:/app/books:file.epub"
+        return parts.slice(1).join(":");
+      }
+      // Legacy format: "server:file.epub"
+      return book.path.substring(7);
+    }
+    return "";
+  }
+
+  static getServerBookDir(book: Book): string {
+    if (book.path && book.path.startsWith("server:")) {
+      const rest = book.path.substring(7);
+      const parts = rest.split(":");
+      if (parts.length >= 2 && parts[0].startsWith("/")) {
+        return parts[0];
+      }
+    }
+    return "";
   }
 }
 

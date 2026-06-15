@@ -125,10 +125,12 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
           id: "add-book",
         }
       );
+      const isServerBook = !!(book.path && book.path.startsWith("server:"));
       if (this.state.isOpenFile) {
         if (ConfigService.getReaderConfig("isPreventAdd") === "yes") {
           //ignore
         } else if (
+          isServerBook ||
           this.props.isAuthed &&
           ConfigService.getItem("defaultSyncOption")
         ) {
@@ -149,6 +151,7 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
         }
       } else {
         if (
+          isServerBook ||
           ConfigService.getReaderConfig("isImportPath") !== "yes" ||
           (this.props.isAuthed && ConfigService.getItem("defaultSyncOption"))
         ) {
@@ -590,6 +593,93 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
       console.error("URL import error:", error);
     }
   };
+
+  handleScanServerBooks = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    this.setState({ isMoreOptionsVisible: false });
+
+    const toastId = "scan-server-books";
+    toast.loading(this.props.t("Scanning server books") + "...", {
+      id: toastId,
+    });
+
+    try {
+      const serverBooks = await BookUtil.fetchServerBookList();
+      if (serverBooks.length === 0) {
+        toast.dismiss(toastId);
+        toast(this.props.t("No new books found on server"), { id: toastId });
+        return;
+      }
+
+      const existingBooks = (await DatabaseService.getAllRecords("books")) || [];
+      const serverBooksList = existingBooks.filter(
+        (b: BookModel) => b.path && b.path.startsWith("server:")
+      );
+
+      // Build set of current server file keys
+      const currentServerKeys = new Set(
+        serverBooks.map((sb: any) => "server:" + (sb.dir || "") + ":" + sb.name)
+      );
+
+      // Remove server books that no longer exist in current directories
+      let removed = 0;
+      for (const oldBook of serverBooksList) {
+        if (!currentServerKeys.has(oldBook.path)) {
+          await BookUtil.deleteBook(oldBook.key, oldBook.format.toLowerCase());
+          await DatabaseService.deleteRecord(oldBook.key, "books");
+          await CoverUtil.deleteCover(oldBook);
+          removed++;
+        }
+      }
+
+      const existingPaths = new Set(
+        serverBooksList
+          .filter((b: BookModel) => currentServerKeys.has(b.path))
+          .map((b: BookModel) => b.path)
+      );
+
+      let imported = 0;
+      let skipped = 0;
+
+      for (const sb of serverBooks) {
+        const serverPath = "server:" + (sb.dir || "") + ":" + sb.name;
+        if (existingPaths.has(serverPath)) {
+          skipped++;
+          continue;
+        }
+
+        toast.loading(
+          this.props.t("Importing") + ": " + sb.name.substring(0, 40),
+          { id: toastId }
+        );
+
+        const buffer = await BookUtil.fetchBookContentFromServer(sb.name, sb.dir);
+        if (!buffer) {
+          console.error("Failed to fetch:", sb.name);
+          continue;
+        }
+
+        const blob = new Blob([buffer]);
+        const file: any = new File([blob], sb.name);
+        file.path = serverPath;
+
+        await this.getMd5WithBrowser(file);
+        imported++;
+      }
+
+      let msg = this.props.t("Scan complete") + ": " +
+          this.props.t("Imported") + " " + imported +
+          ", " + this.props.t("Skipped") + " " + skipped;
+      if (removed > 0) {
+        msg += ", " + this.props.t("Removed") + " " + removed;
+      }
+      toast.success(msg, { id: toastId });
+      this.props.handleFetchBooks();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(this.props.t("Scan failed") + ": " + msg, { id: toastId });
+    }
+  };
   render() {
     return (
       <Dropzone
@@ -821,6 +911,14 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
                     >
                       <span className="more-option-text">
                         <Trans>From OPDS</Trans>
+                      </span>
+                    </div>
+                    <div
+                      className="more-option-item"
+                      onClick={this.handleScanServerBooks}
+                    >
+                      <span className="more-option-text">
+                        <Trans>Scan server books</Trans>
                       </span>
                     </div>
                     <div

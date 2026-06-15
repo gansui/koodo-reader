@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,21 +24,12 @@ func decodeJSON(r *http.Request, v any) error {
 // ── Configuration ────────────────────────────────────────────────────────────
 
 var (
-	uploadDir      string
-	port           string
-	serverEnabled  bool
-	allowedOrigins []string
-	credentials    struct{ username, password string }
+	uploadDir       string
+	port            string
+	serverEnabled   bool
+	allowedOrigins  []string
+	serverBooksDirs []string
 )
-
-func getDockerSecret(name string) string {
-	p := "/run/secrets/" + name
-	data, err := os.ReadFile(p)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
-}
 
 func init() {
 	abs, err := filepath.Abs("./uploads")
@@ -48,36 +38,26 @@ func init() {
 	}
 	uploadDir = abs
 
+	// Server books directories (for reading books placed on the server)
+	// Supports comma-separated paths, e.g. "/app/books1,/app/books2"
+	rawBooksDir := getEnv("SERVER_BOOKS_DIR", "")
+	if rawBooksDir != "" {
+		for _, d := range strings.Split(rawBooksDir, ",") {
+			d = strings.TrimSpace(d)
+			if d == "" {
+				continue
+			}
+			abs, err = filepath.Abs(d)
+			if err != nil {
+				log.Printf("Warning: Cannot resolve server books path %q: %v", d, err)
+				continue
+			}
+			serverBooksDirs = append(serverBooksDirs, abs)
+		}
+	}
+
 	port = getEnv("PORT", "8080")
 	serverEnabled = os.Getenv("ENABLE_HTTP_SERVER") == "true"
-
-	// Password: Docker secret > env > default
-	secretFile := getEnv("SERVER_PASSWORD_FILE", "my_secret")
-	password := getDockerSecret(secretFile)
-	source := "Docker Secret"
-	if password == "" {
-		password = os.Getenv("SERVER_PASSWORD")
-		source = "environment variable (less secure)"
-	}
-	if password == "" {
-		password = "securePass123"
-		source = "default"
-	}
-	switch source {
-	case "Docker Secret":
-		log.Println("Using password from Docker Secret")
-	case "environment variable (less secure)":
-		log.Println("Warning: Using password from environment variable (less secure)")
-	default:
-		log.Println("Warning: Using default password. Set Docker Secret or SERVER_PASSWORD environment variable for production.")
-	}
-
-	credentials.username = getEnv("SERVER_USERNAME", "admin")
-	credentials.password = password
-
-	if os.Getenv("SERVER_USERNAME") == "" {
-		log.Println("Warning: Using default username. Set SERVER_USERNAME environment variable for production.")
-	}
 
 	// Allowed origins
 	raw := os.Getenv("ALLOWED_ORIGINS")
@@ -142,26 +122,6 @@ func getServerOrigin(r *http.Request) string {
 		scheme = strings.TrimSpace(scheme)
 	}
 	return scheme + "://" + host
-}
-
-func authenticate(r *http.Request) bool {
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
-		return false
-	}
-	parts := strings.SplitN(authHeader, " ", 2)
-	if len(parts) != 2 || parts[0] != "Basic" {
-		return false
-	}
-	decoded, err := base64.StdEncoding.DecodeString(parts[1])
-	if err != nil {
-		return false
-	}
-	pair := strings.SplitN(string(decoded), ":", 2)
-	if len(pair) != 2 {
-		return false
-	}
-	return pair[0] == credentials.username && pair[1] == credentials.password
 }
 
 // sanitizeFilename keeps only the base name and replaces Windows-illegal chars.
@@ -445,6 +405,214 @@ func sortFileList(list []fileEntry) {
 	})
 }
 
+// ── Server Books Handlers ──────────────────────────────────────────────────────
+
+type serverBookEntry struct {
+	Name         string `json:"name"`
+	Format       string `json:"format"`
+	Size         int64  `json:"size"`
+	ModifiedTime string `json:"modifiedTime"`
+	Dir          string `json:"dir"`
+}
+
+var supportedBookExts = map[string]bool{
+	".epub": true, ".pdf": true, ".mobi": true, ".azw": true, ".azw3": true,
+	".txt": true, ".fb2": true, ".cbz": true, ".cbr": true, ".cbt": true,
+	".cb7": true, ".html": true, ".htm": true, ".md": true, ".djvu": true,
+}
+
+func scanServerBookDir(dir string) []serverBookEntry {
+	var list []serverBookEntry
+	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(d.Name()))
+		if !supportedBookExts[ext] {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		list = append(list, serverBookEntry{
+			Name:         d.Name(),
+			Format:       ext[1:],
+			Size:         info.Size(),
+			ModifiedTime: info.ModTime().UTC().Format(time.RFC3339),
+			Dir:          dir,
+		})
+		return nil
+	})
+	return list
+}
+
+func handleServerBooksList(w http.ResponseWriter, r *http.Request) {
+	if len(serverBooksDirs) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success":    true,
+			"books":      []serverBookEntry{},
+			"totalCount": 0,
+			"message":    "Server books directory not configured",
+		})
+		return
+	}
+
+	list := make([]serverBookEntry, 0)
+	for _, dir := range serverBooksDirs {
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			continue
+		}
+		list = append(list, scanServerBookDir(dir)...)
+	}
+
+	sort.Slice(list, func(i, j int) bool {
+		return list[i].Name < list[j].Name
+	})
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success":    true,
+		"books":      list,
+		"totalCount": len(list),
+		"directories": serverBooksDirs,
+	})
+}
+
+func handleServerBookRead(w http.ResponseWriter, r *http.Request) {
+	if len(serverBooksDirs) == 0 {
+		writePlain(w, http.StatusBadRequest, "Server books directory not configured")
+		return
+	}
+
+	filename := r.URL.Query().Get("file")
+	if filename == "" {
+		writePlain(w, http.StatusBadRequest, "Missing file parameter")
+		return
+	}
+
+	// Prevent directory traversal
+	safeFilename := sanitizeFilename(filename)
+	if safeFilename == "" || safeFilename == "." || safeFilename == ".." {
+		writePlain(w, http.StatusBadRequest, "Invalid filename")
+		return
+	}
+
+	// Also reject if sanitized name differs (handles more traversal patterns)
+	if safeFilename != filename {
+		writePlain(w, http.StatusBadRequest, "Invalid filename")
+		return
+	}
+
+	// Search in all configured directories (or specific dir if provided)
+	specificDir := r.URL.Query().Get("dir")
+	dirsToSearch := serverBooksDirs
+	if specificDir != "" {
+		dirsToSearch = []string{specificDir}
+	}
+
+	for _, dir := range dirsToSearch {
+		var foundPath string
+		filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if !d.IsDir() && d.Name() == safeFilename {
+				foundPath = path
+				return filepath.SkipAll
+			}
+			return nil
+		})
+		if foundPath == "" {
+			continue
+		}
+
+		info, err := os.Stat(foundPath)
+		if err != nil || info.IsDir() {
+			continue
+		}
+
+		ext := strings.ToLower(filepath.Ext(safeFilename))
+		contentType := bookMime(ext[1:])
+
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
+		w.Header().Set("Content-Disposition",
+			fmt.Sprintf(`inline; filename="%s"`, url.PathEscape(safeFilename)))
+
+		f, err := os.Open(foundPath)
+		if err != nil {
+			writePlain(w, http.StatusInternalServerError, "Internal Server Error")
+			return
+		}
+		defer f.Close()
+		_, _ = io.Copy(w, f)
+		return
+	}
+
+	writePlain(w, http.StatusNotFound, "File not found")
+}
+
+func handleServerBookDelete(w http.ResponseWriter, r *http.Request) {
+	if len(serverBooksDirs) == 0 {
+		writePlain(w, http.StatusBadRequest, "Server books directory not configured")
+		return
+	}
+
+	filename := r.URL.Query().Get("file")
+	if filename == "" {
+		writePlain(w, http.StatusBadRequest, "Missing file parameter")
+		return
+	}
+
+	safeFilename := sanitizeFilename(filename)
+	if safeFilename == "" || safeFilename == "." || safeFilename == ".." {
+		writePlain(w, http.StatusBadRequest, "Invalid filename")
+		return
+	}
+	if safeFilename != filename {
+		writePlain(w, http.StatusBadRequest, "Invalid filename")
+		return
+	}
+
+	specificDir := r.URL.Query().Get("dir")
+	dirsToSearch := serverBooksDirs
+	if specificDir != "" {
+		dirsToSearch = []string{specificDir}
+	}
+
+	for _, dir := range dirsToSearch {
+		var foundPath string
+		filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+			if err != nil || foundPath != "" {
+				return filepath.SkipAll
+			}
+			if !d.IsDir() && d.Name() == safeFilename {
+				foundPath = path
+				return filepath.SkipAll
+			}
+			return nil
+		})
+		if foundPath == "" {
+			continue
+		}
+
+		if err := os.Remove(foundPath); err != nil {
+			log.Printf("Delete server book error: %v", err)
+			writePlain(w, http.StatusInternalServerError, "Failed to delete file")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success":  true,
+			"filename": safeFilename,
+			"message":  "File deleted successfully",
+		})
+		return
+	}
+
+	writePlain(w, http.StatusNotFound, "File not found")
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 func handler(w http.ResponseWriter, r *http.Request) {
@@ -469,15 +637,23 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Basic Auth
-	if !authenticate(r) {
-		w.Header().Set("WWW-Authenticate", `Basic realm="Secure File Server"`)
-		writePlain(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-
 	dirParam := r.URL.Query().Get("dir")
 	path := r.URL.Path
+
+	// Server books endpoints
+	if r.Method == http.MethodGet && (path == "/api/server-books" || path == "/api/server-books/read") {
+		switch {
+		case path == "/api/server-books":
+			handleServerBooksList(w, r)
+		case path == "/api/server-books/read":
+			handleServerBookRead(w, r)
+		}
+		return
+	}
+	if r.Method == http.MethodDelete && path == "/api/server-books/delete" {
+		handleServerBookDelete(w, r)
+		return
+	}
 
 	switch {
 	case r.Method == http.MethodPost && path == "/upload":
@@ -515,6 +691,15 @@ func main() {
 		log.Fatalf("Cannot create uploads directory: %v", err)
 	}
 
+	if len(serverBooksDirs) > 0 {
+		for _, d := range serverBooksDirs {
+			if err := os.MkdirAll(d, 0o755); err != nil {
+				log.Printf("Warning: Cannot create server books directory %s: %v", d, err)
+			}
+		}
+		log.Printf("Server books directories: %v", serverBooksDirs)
+	}
+
 	// Start KOReader sync server in background if enabled.
 	if koreaderEnabled {
 		go startKoreaderServer()
@@ -523,9 +708,7 @@ func main() {
 	// Start the main file server if enabled.
 	if serverEnabled {
 		addr := ":" + port
-		log.Printf("Secure File Server running at http://localhost%s", addr)
-		log.Printf("Username: %s", credentials.username)
-		log.Println("Password: [HIDDEN FOR SECURITY]")
+		log.Printf("File Server running at http://localhost%s", addr)
 		if opdsEnabled {
 			log.Printf("OPDS catalog available at http://localhost%s/opds", addr)
 		}
