@@ -267,91 +267,94 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
         return resolve();
       }
       if (!isRepeat) {
-        let reader = new FileReader();
-        reader.readAsArrayBuffer(file);
+        const processContent = async (file_content: ArrayBuffer) => {
+          try {
+            let rendition = BookHelper.getRendition(
+              file_content,
+              {
+                format: extension.toUpperCase(),
+                readerMode: "",
+                charset: "",
+                animation:
+                  ConfigService.getReaderConfig("isSliding") === "yes"
+                    ? "sliding"
+                    : "",
+                convertChinese:
+                  ConfigService.getReaderConfig("convertChinese"),
+                bookLayout: ConfigService.getReaderConfig("bookLayout"),
+                fullTranslationMode: "no",
+                textOrientation:
+                  ConfigService.getReaderConfig("textOrientation"),
+                parserRegex: "",
+                isDarkMode: "no",
+                isMobile: "no",
+                password: "",
+                isScannedPDF: "no",
+              },
+              Kookit
+            );
+            result = await BookHelper.generateBook(
+              bookName,
+              extension,
+              md5,
+              file.size,
+              file.path || clickFilePath,
+              file_content,
+              rendition
+            );
 
-        reader.onload = async (e) => {
-          if (!e.target) {
-            console.error("e.target error", bookName);
+            if (
+              ConfigService.getReaderConfig("isPrecacheBook") === "yes" &&
+              extension !== "pdf"
+            ) {
+              let cache = await rendition.preCache(file_content);
+              if (cache !== "err" || cache) {
+                await BookUtil.addBook("cache-" + result.key, "zip", cache);
+              }
+            }
+          } catch (error) {
+            console.error(error, bookName);
             toast.error(this.props.t("Import failed") + ": " + bookName, {
               duration: 4000,
             });
             return resolve();
           }
-          let reader = new FileReader();
-          reader.onload = async (event) => {
-            const file_content = (event.target as any).result;
-            try {
-              let rendition = BookHelper.getRendition(
-                file_content,
-                {
-                  format: extension.toUpperCase(),
-                  readerMode: "",
-                  charset: "",
-                  animation:
-                    ConfigService.getReaderConfig("isSliding") === "yes"
-                      ? "sliding"
-                      : "",
-                  convertChinese:
-                    ConfigService.getReaderConfig("convertChinese"),
-                  bookLayout: ConfigService.getReaderConfig("bookLayout"),
-                  fullTranslationMode: "no",
-                  textOrientation:
-                    ConfigService.getReaderConfig("textOrientation"),
-                  parserRegex: "",
-                  isDarkMode: "no",
-                  isMobile: "no",
-                  password: "",
-                  isScannedPDF: "no",
-                },
-                Kookit
-              );
-              result = await BookHelper.generateBook(
-                bookName,
-                extension,
-                md5,
-                file.size,
-                file.path || clickFilePath,
-                file_content,
-                rendition
-              );
 
-              if (
-                ConfigService.getReaderConfig("isPrecacheBook") === "yes" &&
-                extension !== "pdf"
-              ) {
-                let cache = await rendition.preCache(file_content);
-                if (cache !== "err" || cache) {
-                  await BookUtil.addBook("cache-" + result.key, "zip", cache);
-                }
-              }
-            } catch (error) {
-              console.error(error, bookName);
-              toast.error(this.props.t("Import failed") + ": " + bookName, {
-                duration: 4000,
-              });
-              return resolve();
-            }
+          clickFilePath = "";
 
-            clickFilePath = "";
-
-            // get metadata failed
-            if (!result || !result.key) {
-              console.error("get metadata failed", bookName);
-              toast.error(this.props.t("Import failed") + ": " + bookName, {
-                duration: 4000,
-              });
-              return resolve();
-            }
-            await this.handleAddBook(
-              result as BookModel,
-              file_content as ArrayBuffer
-            );
-
+          // get metadata failed
+          if (!result || !result.key) {
+            console.error("get metadata failed", bookName);
+            toast.error(this.props.t("Import failed") + ": " + bookName, {
+              duration: 4000,
+            });
             return resolve();
-          };
-          reader.readAsArrayBuffer(file);
+          }
+          await this.handleAddBook(
+            result as BookModel,
+            file_content as ArrayBuffer
+          );
+
+          return resolve();
         };
+
+        if (file._preloadedBuffer) {
+          await processContent(file._preloadedBuffer);
+        } else {
+          let reader = new FileReader();
+          reader.readAsArrayBuffer(file);
+
+          reader.onload = async (e) => {
+            if (!e.target) {
+              console.error("e.target error", bookName);
+              toast.error(this.props.t("Import failed") + ": " + bookName, {
+                duration: 4000,
+              });
+              return resolve();
+            }
+            await processContent(e.target.result as ArrayBuffer);
+          };
+        }
       }
     });
   };
@@ -621,16 +624,18 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
         serverBooks.map((sb: any) => "server:" + (sb.dir || "") + ":" + sb.name)
       );
 
-      // Remove server books that no longer exist in current directories
-      let removed = 0;
-      for (const oldBook of serverBooksList) {
-        if (!currentServerKeys.has(oldBook.path)) {
+      // Remove server books that no longer exist in current directories (in parallel)
+      const booksToRemove = serverBooksList.filter(
+        (b: BookModel) => !currentServerKeys.has(b.path)
+      );
+      await Promise.all(
+        booksToRemove.map(async (oldBook) => {
           await BookUtil.deleteBook(oldBook.key, oldBook.format.toLowerCase());
           await DatabaseService.deleteRecord(oldBook.key, "books");
           await CoverUtil.deleteCover(oldBook);
-          removed++;
-        }
-      }
+        })
+      );
+      const removed = booksToRemove.length;
 
       const existingPaths = new Set(
         serverBooksList
@@ -638,30 +643,62 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
           .map((b: BookModel) => b.path)
       );
 
-      let imported = 0;
+      // Identify new books to import
+      const newBooks: { sb: any; serverPath: string }[] = [];
       let skipped = 0;
-
       for (const sb of serverBooks) {
         const serverPath = "server:" + (sb.dir || "") + ":" + sb.name;
         if (existingPaths.has(serverPath)) {
           skipped++;
-          continue;
+        } else {
+          newBooks.push({ sb, serverPath });
         }
+      }
+
+      if (newBooks.length === 0) {
+        let msg = this.props.t("Scan complete") + ": " +
+            this.props.t("Imported") + " 0" +
+            ", " + this.props.t("Skipped") + " " + skipped;
+        if (removed > 0) {
+          msg += ", " + this.props.t("Removed") + " " + removed;
+        }
+        toast.success(msg, { id: toastId });
+        this.props.handleFetchBooks();
+        return;
+      }
+
+      // Pre-fetch all new book content in parallel
+      toast.loading(
+        this.props.t("Scanning server books") + "... (" + newBooks.length + ")",
+        { id: toastId }
+      );
+      const bufferResults = await Promise.allSettled(
+        newBooks.map(({ sb }) =>
+          BookUtil.fetchBookContentFromServer(sb.name, sb.dir)
+        )
+      );
+
+      // Process each book sequentially (handleAddBook has side effects on state)
+      let imported = 0;
+      for (let i = 0; i < newBooks.length; i++) {
+        const { sb, serverPath } = newBooks[i];
+        const result = bufferResults[i];
 
         toast.loading(
-          this.props.t("Importing") + ": " + sb.name.substring(0, 40),
+          this.props.t("Importing") + " (" + (i + 1) + "/" + newBooks.length + "): " + sb.name.substring(0, 35),
           { id: toastId }
         );
 
-        const buffer = await BookUtil.fetchBookContentFromServer(sb.name, sb.dir);
-        if (!buffer) {
+        if (result.status !== "fulfilled" || !result.value) {
           console.error("Failed to fetch:", sb.name);
           continue;
         }
 
+        const buffer = result.value;
         const blob = new Blob([buffer]);
         const file: any = new File([blob], sb.name);
         file.path = serverPath;
+        file._preloadedBuffer = buffer;
 
         await this.getMd5WithBrowser(file);
         imported++;
